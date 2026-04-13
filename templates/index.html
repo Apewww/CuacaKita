@@ -5,6 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CuacaKita - Widget Cuaca Modern</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#3b82f6">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -63,10 +65,17 @@
                 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
                 CuacaKita
             </h1>
-            <!-- <button id="theme-toggle" class="p-2 rounded-full glass hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
-                <i data-lucide="moon" class="w-6 h-6 block dark:hidden"></i>
-                <i data-lucide="sun" class="w-6 h-6 hidden dark:block"></i>
-            </button> -->
+            <div class="flex items-center gap-2">
+                <button id="noti-btn" title="Aktifkan Notifikasi"
+                    class="p-2 rounded-full glass hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                    <i data-lucide="bell" class="w-6 h-6"></i>
+                </button>
+                <button id="theme-toggle"
+                    class="p-2 rounded-full glass hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                    <i data-lucide="moon" class="w-6 h-6 block dark:hidden"></i>
+                    <i data-lucide="sun" class="w-6 h-6 hidden dark:block"></i>
+                </button>
+            </div>
         </div>
 
         <!-- Search Input -->
@@ -206,8 +215,123 @@
             }
         });
 
-        // Initial Load
-        fetchWeather('Cimahi');
+        // Initial Load with Geolocation
+        if (navigator.geolocation) {
+            console.log('Detecting location...');
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    console.log('Location found:', latitude, longitude);
+                    fetchWeather(`${latitude},${longitude}`);
+                },
+                (error) => {
+                    console.warn('Geolocation failed or denied, using default city.');
+                    fetchWeather('Cimahi');
+                }
+            );
+        } else {
+            fetchWeather('Cimahi');
+        }
+
+        // PWA & Push Notification Logic
+        const notiBtn = document.getElementById('noti-btn');
+
+        if ('serviceWorker' in navigator && 'PushManager' in window) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => {
+                        console.log('SW Registered');
+                        checkSubscription(reg);
+                    })
+                    .catch(err => console.error('SW Registration failed', err));
+            });
+        }
+
+        async function checkSubscription(reg) {
+            console.log('Checking subscription...');
+            try {
+                const sub = await reg.pushManager.getSubscription();
+                if (!sub) {
+                    console.log('No local subscription found.');
+                    notiBtn.classList.remove('hidden');
+                } else {
+                    // Check if this subscription still exists in server DB
+                    const response = await fetch('/api/debug-subs');
+                    const subs = await response.json();
+                    
+                    // If debug-subs is disabled (production), we might not be able to check easily.
+                    // But if it returns an error/empty, we handle it.
+                    let isRegistered = false;
+                    if (Array.isArray(subs)) {
+                        isRegistered = subs.some(s => s.endpoint === sub.endpoint);
+                    }
+                    
+                    if (!isRegistered) {
+                        console.log('Local sub exists but not in server DB. Showing bell.');
+                        notiBtn.classList.remove('hidden');
+                    } else {
+                        console.log('Subscription active.');
+                        notiBtn.classList.add('hidden');
+                    }
+                }
+                if (window.lucide) lucide.createIcons();
+            } catch (err) {
+                console.error('Error checking subscription:', err);
+                // Fallback: show button if check fails
+                notiBtn.classList.remove('hidden');
+            }
+        }
+
+        notiBtn.addEventListener('click', async () => {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+                subscribeUser();
+            } else {
+                alert('Izin notifikasi ditolak.');
+            }
+        });
+
+        async function subscribeUser() {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                const response = await fetch('/api/vapid-public-key');
+                const { publicKey } = await response.json();
+
+                const subscription = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(publicKey)
+                });
+
+                // Get current city name from the UI
+                const currentCity = document.getElementById('city-name').textContent;
+
+                await fetch('/api/subscribe', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        subscription: subscription,
+                        city: currentCity
+                    }),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                notiBtn.classList.add('hidden');
+                alert(`Notifikasi diaktifkan untuk kota ${currentCity}!`);
+            } catch (err) {
+                console.error('Subscription failed', err);
+                alert('Gagal mengaktifkan notifikasi.');
+            }
+        }
+
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
     </script>
 </body>
 
