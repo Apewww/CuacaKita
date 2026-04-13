@@ -66,12 +66,12 @@
                 CuacaKita
             </h1>
             <div class="flex items-center gap-2">
-                <button id="noti-btn" title="Aktifkan Notifikasi"
+                <button id="noti-btn" title="Pengaturan Notifikasi"
                     class="p-2 rounded-full glass hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
-                    <i data-lucide="bell" class="w-6 h-6"></i>
+                    <i id="noti-icon" data-lucide="bell-off" class="w-6 h-6"></i>
                 </button>
                 <button id="theme-toggle"
-                    class="p-2 rounded-full glass hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                    class="p-2 rounded-full glass hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors hidden">
                     <i data-lucide="moon" class="w-6 h-6 block dark:hidden"></i>
                     <i data-lucide="sun" class="w-6 h-6 hidden dark:block"></i>
                 </button>
@@ -235,6 +235,8 @@
 
         // PWA & Push Notification Logic
         const notiBtn = document.getElementById('noti-btn');
+        const notiIcon = document.getElementById('noti-icon');
+        let isSubscribed = false;
 
         if ('serviceWorker' in navigator && 'PushManager' in window) {
             window.addEventListener('load', () => {
@@ -248,46 +250,50 @@
         }
 
         async function checkSubscription(reg) {
-            console.log('Checking subscription...');
             try {
                 const sub = await reg.pushManager.getSubscription();
                 if (!sub) {
-                    console.log('No local subscription found.');
-                    notiBtn.classList.remove('hidden');
-                } else {
-                    // Check if this subscription still exists in server DB
-                    const response = await fetch('/api/debug-subs');
-                    const subs = await response.json();
-                    
-                    // If debug-subs is disabled (production), we might not be able to check easily.
-                    // But if it returns an error/empty, we handle it.
-                    let isRegistered = false;
-                    if (Array.isArray(subs)) {
-                        isRegistered = subs.some(s => s.endpoint === sub.endpoint);
-                    }
-                    
-                    if (!isRegistered) {
-                        console.log('Local sub exists but not in server DB. Showing bell.');
-                        notiBtn.classList.remove('hidden');
-                    } else {
-                        console.log('Subscription active.');
-                        notiBtn.classList.add('hidden');
-                    }
+                    updateNotiUI(false);
+                    return;
                 }
-                if (window.lucide) lucide.createIcons();
+
+                // Pengecekan aman ke server tanpa debug-subs
+                const response = await fetch('/api/check-status', {
+                    method: 'POST',
+                    body: JSON.stringify({ endpoint: sub.endpoint }),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                isSubscribed = (data.status === 'subscribed');
+                updateNotiUI(isSubscribed);
             } catch (err) {
-                console.error('Error checking subscription:', err);
-                // Fallback: show button if check fails
-                notiBtn.classList.remove('hidden');
+                console.error('Gagal cek status:', err);
             }
         }
 
-        notiBtn.addEventListener('click', async () => {
-            const permission = await Notification.requestPermission();
-            if (permission === 'granted') {
-                subscribeUser();
+        function updateNotiUI(active) {
+            isSubscribed = active;
+            if (active) {
+                notiIcon.setAttribute('data-lucide', 'bell');
+                notiBtn.classList.add('text-blue-500');
             } else {
-                alert('Izin notifikasi ditolak.');
+                notiIcon.setAttribute('data-lucide', 'bell-off');
+                notiBtn.classList.remove('text-blue-500');
+            }
+            lucide.createIcons();
+        }
+
+        notiBtn.addEventListener('click', async () => {
+            if (isSubscribed) {
+                await unsubscribeUser();
+            } else {
+                const permission = await Notification.requestPermission();
+                if (permission === 'granted') {
+                    await subscribeUser();
+                } else {
+                    alert('Izin notifikasi ditolak.');
+                }
             }
         });
 
@@ -302,23 +308,42 @@
                     applicationServerKey: urlBase64ToUint8Array(publicKey)
                 });
 
-                // Get current city name from the UI
-                const currentCity = document.getElementById('city-name').textContent;
+                const currentCity = document.getElementById('city-name').textContent || 'Cimahi';
 
                 await fetch('/api/subscribe', {
                     method: 'POST',
-                    body: JSON.stringify({
-                        subscription: subscription,
-                        city: currentCity
-                    }),
+                    body: JSON.stringify({ subscription, city: currentCity }),
                     headers: { 'Content-Type': 'application/json' }
                 });
 
-                notiBtn.classList.add('hidden');
-                alert(`Notifikasi diaktifkan untuk kota ${currentCity}!`);
+                updateNotiUI(true);
+                alert(`Notifikasi aktif untuk ${currentCity}`);
             } catch (err) {
-                console.error('Subscription failed', err);
-                alert('Gagal mengaktifkan notifikasi.');
+                console.error('Gagal subscribe:', err);
+            }
+        }
+
+
+        async function unsubscribeUser() {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                const sub = await reg.pushManager.getSubscription();
+
+                if (sub) {
+                    // Hapus di server
+                    await fetch('/api/unsubscribe', {
+                        method: 'POST',
+                        body: JSON.stringify({ endpoint: sub.endpoint }),
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    // Hapus di browser
+                    await sub.unsubscribe();
+                }
+
+                updateNotiUI(false);
+                alert('Notifikasi dimatikan.');
+            } catch (err) {
+                console.error('Gagal unsubscribe:', err);
             }
         }
 

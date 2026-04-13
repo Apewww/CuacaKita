@@ -59,7 +59,10 @@ def check_weather_updates():
                 
                 # Check for significant changes
                 for sub in city_subs:
-                    if sub.last_condition and sub.last_condition != new_condition:
+                    if sub.last_condition is None:
+                        sub.last_condition = new_condition
+                    # elif sub.last_condition != new_condition:
+                    elif sub.last_condition:
                         # Significant change detection (demo: any change)
                         send_custom_push(sub, {
                             "title": f"Update Cuaca - {city}",
@@ -175,6 +178,31 @@ def test_push():
             
     return jsonify({"results": results})
 
+@app.route('/api/check-status', methods=['POST'])
+def check_status():
+    data = request.get_json()
+    endpoint = data.get('endpoint')
+    if not endpoint:
+        return jsonify({"status": "unsubscribed"}), 400
+    
+    exists = Subscription.query.filter_by(endpoint=endpoint).first()
+    if exists:
+        return jsonify({"status": "subscribed", "city": exists.city})
+    return jsonify({"status": "unsubscribed"})
+
+@app.route('/api/unsubscribe', methods=['POST'])
+def unsubscribe():
+    data = request.get_json()
+    endpoint = data.get('endpoint')
+    if not endpoint:
+        return jsonify({"error": "No endpoint"}), 400
+    
+    sub = Subscription.query.filter_by(endpoint=endpoint).first()
+    if sub:
+        db.session.delete(sub)
+        db.session.commit()
+    return jsonify({"status": "success"})
+
 @app.route('/api/debug-subs')
 def debug_subs():
     if not app.debug:
@@ -188,14 +216,16 @@ def debug_subs():
         "last_condition": s.last_condition
     } for s in subs])
 
+app.config['SCHEDULER_API_ENABLED'] = True
+
 if __name__ == "__main__":
     debug_mode = os.getenv("FLASK_DEBUG", "False").lower() == "true"
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", 8003))
     
-    # Scheduler setup
-    app.config['SCHEDULER_API_ENABLED'] = True
-    scheduler.init_app(app)
-    scheduler.add_job(id='weather_job', func=check_weather_updates, trigger='interval', minutes=30)
-    scheduler.start()
+    if not scheduler.running: 
+        scheduler.init_app(app)
+        # Uji coba 5 detik (Ubah kembali ke minutes=30 untuk production sesungguhnya)
+        scheduler.add_job(id='weather_job', func=check_weather_updates, trigger='interval', minutes=30)
+        scheduler.start()
     
-    app.run(debug=debug_mode, host='0.0.0.0', port=port, use_reloader=False)
+    app.run(debug=debug_mode, host='0.0.0.0', port=port, use_reloader=False)
