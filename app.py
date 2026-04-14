@@ -61,9 +61,8 @@ def check_weather_updates():
                 for sub in city_subs:
                     if sub.last_condition is None:
                         sub.last_condition = new_condition
-                    # elif sub.last_condition != new_condition:
-                    elif sub.last_condition:
-                        # Significant change detection (demo: any change)
+                    elif sub.last_condition != new_condition:
+                        # Significant change detection
                         send_custom_push(sub, {
                             "title": f"Update Cuaca - {city}",
                             "body": f"Cuaca berubah dari {sub.last_condition} menjadi {new_condition}.",
